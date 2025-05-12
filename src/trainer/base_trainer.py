@@ -72,8 +72,6 @@ class BaseTrainer:
         self.criterion = criterion
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
-        self.text_encoder = text_encoder
-        self.batch_transforms = batch_transforms
 
         # define dataloaders
         self.train_dataloader = dataloaders["train"]

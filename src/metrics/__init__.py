@@ -1,2 +1,3 @@
-from src.metrics.cer import ArgmaxCERMetric
-from src.metrics.wer import ArgmaxWERMetric
+from src.metrics.mae import MaeMetric
+from src.metrics.mse import MseMetric
+from src.metrics.rmse import RmseMetric
