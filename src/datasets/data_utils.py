@@ -4,6 +4,7 @@ from hydra.utils import instantiate
 
 from src.datasets.collate import collate_fn
 from src.utils.init_utils import set_worker_seed
+from torch.utils.data import Subset
 
 
 def inf_loop(dataloader):
@@ -43,7 +44,7 @@ def move_batch_transforms_to_device(batch_transforms, device):
                 transforms[transform_name] = transforms[transform_name].to(device)
 
 
-def get_dataloaders(config, text_encoder, device):
+def get_dataloaders(config, device):
     """
     Create dataloaders for each of the dataset partitions.
     Also creates instance and batch transforms.
@@ -61,16 +62,15 @@ def get_dataloaders(config, text_encoder, device):
             tensor name.
     """
     # transforms or augmentations init
-    batch_transforms = instantiate(config.transforms.batch_transforms)
-    move_batch_transforms_to_device(batch_transforms, device)
-
     # dataloaders init
     dataloaders = {}
+    dataset = instantiate(
+        config.datasets["train"],
+    )  # instance transforms are defined inside
     for dataset_partition in config.datasets.keys():
         # dataset partition init
-        dataset = instantiate(
-            config.datasets[dataset_partition], text_encoder=text_encoder
-        )  # instance transforms are defined inside
+        ind_range = list(range(config.datasets[dataset_partition]['data_start'], config.datasets[dataset_partition]['data_end']))
+        datasubset = Subset(dataset, ind_range)
 
         assert config.dataloader.batch_size <= len(dataset), (
             f"The batch size ({config.dataloader.batch_size}) cannot "
@@ -79,12 +79,12 @@ def get_dataloaders(config, text_encoder, device):
 
         partition_dataloader = instantiate(
             config.dataloader,
-            dataset=dataset,
+            dataset=datasubset,
             collate_fn=collate_fn,
             drop_last=(dataset_partition == "train"),
-            shuffle=(dataset_partition == "train"),
+            shuffle=False,
             worker_init_fn=set_worker_seed,
         )
         dataloaders[dataset_partition] = partition_dataloader
 
-    return dataloaders, batch_transforms
+    return dataloaders

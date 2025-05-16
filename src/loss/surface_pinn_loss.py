@@ -57,6 +57,8 @@ class SurfacePressurePhysicallyInformedLoss(nn.Module):
         
         if variable_mapping is not None:
             self.variable_mapping.update(variable_mapping)
+
+        self.epsilon = 1e-8
     
     def get_variable(self, batch: Batch, var_name: str):
         if var_name not in self.variable_mapping:
@@ -83,10 +85,9 @@ class SurfacePressurePhysicallyInformedLoss(nn.Module):
         field = field.to(self.device)
         
         der_t = torch.zeros_like(field, device=self.device)
-            
-        der_t[:, 1:-1] = (field[:, 2:] - field[:, :-2]) / (2.0 * dt)
-        der_t[:, 0] = (field[:, 1] - field[:, 0]) / dt
-        der_t[:, -1] = (field[:, -1] - field[:, -2]) / dt
+        der_t[:, 1:-1] = (field[:, 2:] - field[:, :-2]) / (2.0 * dt + self.epsilon)
+        der_t[:, 0] = (field[:, 1] - field[:, 0]) / (dt + self.epsilon)
+        der_t[:, -1] = (field[:, -1] - field[:, -2]) / (dt + self.epsilon)
         
         return der_t.to(self.device)
     
@@ -110,13 +111,13 @@ class SurfacePressurePhysicallyInformedLoss(nn.Module):
         actual_dy = dy * meters_per_lat_reshaped
         actual_dx = dx * meters_per_lon_reshaped
 
-        der_lat[..., 1:-1, :] = (x[..., 2:, :] - x[..., :-2, :]) / (2.0 * actual_dy[..., 1:-1, :])
-        der_lat[..., 0, :] = (x[..., 1, :] - x[..., 0, :]) / actual_dy[..., 0:1, :]
-        der_lat[..., -1, :] = (x[..., -1, :] - x[..., -2, :]) / actual_dy[..., -1:, :]
+        der_lat[..., 1:-1, :] = (x[..., 2:, :] - x[..., :-2, :]) / (2.0 * actual_dy[..., 1:-1, :] + self.epsilon)
+        der_lat[..., 0, :] = (x[..., 1, :] - x[..., 0, :]) / (actual_dy[..., 0:1, :] + self.epsilon)
+        der_lat[..., -1, :] = (x[..., -1, :] - x[..., -2, :]) / (actual_dy[..., -1:, :] + self.epsilon)
 
-        der_lon[..., :, 1:-1] = (x[..., :, 2:] - x[..., :, :-2]) / (2.0 * actual_dx[..., :, 0:1])
-        der_lon[..., :, 0:1] = (x[..., :, 1:2] - x[..., :, 0:1]) / actual_dx[..., :, 0:1]
-        der_lon[..., :, -1:] = (x[..., :, -1:] - x[..., :, -2:-1]) / actual_dx[..., :, 0:1]
+        der_lon[..., :, 1:-1] = (x[..., :, 2:] - x[..., :, :-2]) / (2.0 * actual_dx[..., :, 0:1] + self.epsilon)
+        der_lon[..., :, 0:1] = (x[..., :, 1:2] - x[..., :, 0:1]) / (actual_dx[..., :, 0:1] + self.epsilon)
+        der_lon[..., :, -1:] = (x[..., :, -1:] - x[..., :, -2:-1]) / (actual_dx[..., :, 0:1] + self.epsilon)
         
         return der_lat.to(self.device), der_lon.to(self.device)
     
@@ -136,7 +137,7 @@ class SurfacePressurePhysicallyInformedLoss(nn.Module):
         sp = sp.to(self.device)
         latitude = latitude.to(self.device)
 
-        log_sp = torch.log(sp)
+        log_sp = torch.log(sp + self.epsilon)
 
         dlog_sp_dy, dlog_sp_dx = self.take_space_derivative(log_sp, latitude, dx, dy)
         
@@ -169,7 +170,7 @@ class SurfacePressurePhysicallyInformedLoss(nn.Module):
 
         sp_expanded = sp.unsqueeze(2).expand(b, t, levels, h, w)
 
-        sigma = p_levels / sp_expanded
+        sigma = p_levels / (sp_expanded + self.epsilon)
 
         delta_sigma = torch.zeros_like(sigma, device=self.device)
 
@@ -194,7 +195,7 @@ class SurfacePressurePhysicallyInformedLoss(nn.Module):
         v = self.get_variable(batch, 'v')
         sp = self.get_variable(batch, 'sp')
 
-        log_sp = torch.log(sp)
+        log_sp = torch.log(sp + self.epsilon)
 
         dlog_sp_dt = self.take_time_derivative(log_sp, dt)
 
@@ -233,8 +234,8 @@ class SurfacePressurePhysicallyInformedLoss(nn.Module):
     def calculate_residuals_from_tensor(self, data_tensor, dt=6, dx=0.25, dy=0.25):
         data_tensor.to(self.device)
 
-        lat = torch.linspace(90, -90, 721).to(self.device)
-        lon = torch.linspace(0, 360, 1440+1)[:-1].to(self.device)
+        lat = torch.linspace(90, -90, 32).to(self.device)
+        lon = torch.linspace(0, 360, 64+1)[:-1].to(self.device)
         atmos_levels = torch.tensor([50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000]).to(self.device)
 
         b, time_steps, _, h, w = data_tensor.shape
@@ -245,10 +246,10 @@ class SurfacePressurePhysicallyInformedLoss(nn.Module):
             atmos_levels=atmos_levels
         )
 
-        t = data_tensor[:, :, 13:26]
-        u = data_tensor[:, :, 26:39]
-        v = data_tensor[:, :, 39:52]
-        msl = data_tensor[:, :, 68:69]
+        t = data_tensor[:, :, 17:30]
+        u = data_tensor[:, :, 30:43]
+        v = data_tensor[:, :, 43:56]
+        msl = data_tensor[:, :, 3:4]
 
         original_mapping = self.variable_mapping.copy()
         

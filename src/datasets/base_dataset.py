@@ -1,12 +1,8 @@
 import logging
-import random
-
+import os
 import numpy as np
 import torch
-import torchaudio
 from torch.utils.data import Dataset
-
-from src.text_encoder import CTCTextEncoder
 
 logger = logging.getLogger(__name__)
 
@@ -59,12 +55,18 @@ class BaseDataset(Dataset):
             instance_data (dict): dict, containing instance
                 (a single dataset element).
         """
-        ind += 1
+        output = {}
 
-        return {key: value[ind, ind+3] for key, value in self._index.items()}
+        for key, value in self._index.items():
+            data = []
+            for i in range(ind, ind + 23):
+                data.append(torch.from_numpy(np.load(os.path.join(value, f"{i}.npy"))).unsqueeze(0))
+            output[key] = torch.cat(data, dim=0)
+
+        return output
 
     def __len__(self):
         """
         Get length of the dataset (length of the index).
         """
-        return len(self._index) - 2
+        return 92044 - 26

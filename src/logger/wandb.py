@@ -64,6 +64,7 @@ class WandBWriter:
         # used to separate Partition1 and Partition2 metrics
         self.mode = ""
         self.timer = datetime.now()
+        self.run_name = run_name
 
     def set_step(self, step, mode="train"):
         """

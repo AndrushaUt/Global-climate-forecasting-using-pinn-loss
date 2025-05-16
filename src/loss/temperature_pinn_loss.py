@@ -57,6 +57,8 @@ class TemperaturePhysicallyInformedLoss(nn.Module):
         
         if variable_mapping is not None:
             self.variable_mapping.update(variable_mapping)
+            
+        self.epsilon = 1e-8
     
     def get_variable(self,
             batch: Batch,
@@ -113,13 +115,13 @@ class TemperaturePhysicallyInformedLoss(nn.Module):
         actual_dy = dy * meters_per_lat_reshaped
         actual_dx = dx * meters_per_lon_reshaped
 
-        der_lat[..., 1:-1, :] = (x[..., 2:, :] - x[..., :-2, :]) / (2.0 * actual_dy[..., 1:-1, :])
-        der_lat[..., 0, :] = (x[..., 1, :] - x[..., 0, :]) / actual_dy[..., 0:1, :]
-        der_lat[..., -1, :] = (x[..., -1, :] - x[..., -2, :]) / actual_dy[..., -1:, :]
+        der_lat[..., 1:-1, :] = (x[..., 2:, :] - x[..., :-2, :]) / (2.0 * actual_dy[..., 1:-1, :] + self.epsilon)
+        der_lat[..., 0, :] = (x[..., 1, :] - x[..., 0, :]) / (actual_dy[..., 0:1, :] + self.epsilon)
+        der_lat[..., -1, :] = (x[..., -1, :] - x[..., -2, :]) / (actual_dy[..., -1:, :] + self.epsilon)
 
-        der_lon[..., :, 1:-1] = (x[..., :, 2:] - x[..., :, :-2]) / (2.0 * actual_dx[..., :, 0:1])
-        der_lon[..., :, 0:1] = (x[..., :, 1:2] - x[..., :, 0:1]) / actual_dx[..., :, 0:1]
-        der_lon[..., :, -1:] = (x[..., :, -1:] - x[..., :, -2:-1]) / actual_dx[..., :, 0:1]
+        der_lon[..., :, 1:-1] = (x[..., :, 2:] - x[..., :, :-2]) / (2.0 * actual_dx[..., :, 0:1] + self.epsilon)
+        der_lon[..., :, 0:1] = (x[..., :, 1:2] - x[..., :, 0:1]) / (actual_dx[..., :, 0:1] + self.epsilon)
+        der_lon[..., :, -1:] = (x[..., :, -1:] - x[..., :, -2:-1]) / (actual_dx[..., :, 0:1] + self.epsilon)
         
         return der_lat, der_lon
 
@@ -130,7 +132,8 @@ class TemperaturePhysicallyInformedLoss(nn.Module):
         b, t, h, w = msl.shape
         pressure_levels = (pressure_levels * 100).reshape(1, 1, -1, 1, 1).repeat(b, t, 1, h, w)
         ps_expanded = msl.unsqueeze(2)
-        sigma = pressure_levels / ps_expanded
+        
+        sigma = pressure_levels / (ps_expanded + self.epsilon)
         
         sigma_dot = self.take_time_derivative(sigma, dt)
         
@@ -154,9 +157,12 @@ class TemperaturePhysicallyInformedLoss(nn.Module):
         b, t, h, w = msl.shape
         p_levels = (pressure_levels * 100).reshape(1, 1, -1, 1, 1).repeat(b, t, 1, h, w)
         ps_expanded = msl.unsqueeze(2)
-        sigma = p_levels / ps_expanded
+        
+        sigma = p_levels / (ps_expanded + self.epsilon)
 
         delta_sigma = torch.abs(sigma[:, :, 1:, ...] - sigma[:, :, :-1, ...])
+        
+        delta_sigma = torch.clamp(delta_sigma, min=self.epsilon)
         
         return delta_sigma
 
@@ -169,16 +175,16 @@ class TemperaturePhysicallyInformedLoss(nn.Module):
             delta_up = delta_sigma[:, :, i, ...]
             delta_down = delta_sigma[:, :, i-1, ...]
 
-            weight_up = delta_down / (delta_up + delta_down)
-            weight_down = delta_up / (delta_up + delta_down)
+            weight_up = delta_down / (delta_up + delta_down + self.epsilon)
+            weight_down = delta_up / (delta_up + delta_down + self.epsilon)
             
             der_sigma[:, :, i, ...] = (
-                weight_up * (x[:, :, i+1, ...] - x[:, :, i, ...]) / delta_up +
-                weight_down * (x[:, :, i, ...] - x[:, :, i-1, ...]) / delta_down
+                weight_up * (x[:, :, i+1, ...] - x[:, :, i, ...]) / (delta_up + self.epsilon) +
+                weight_down * (x[:, :, i, ...] - x[:, :, i-1, ...]) / (delta_down + self.epsilon)
             )
 
-        der_sigma[:, :, 0, ...] = (x[:, :, 1, ...] - x[:, :, 0, ...]) / delta_sigma[:, :, 0, ...]
-        der_sigma[:, :, -1, ...] = (x[:, :, -1, ...] - x[:, :, -2, ...]) / delta_sigma[:, :, -2, ...]
+        der_sigma[:, :, 0, ...] = (x[:, :, 1, ...] - x[:, :, 0, ...]) / (delta_sigma[:, :, 0, ...] + self.epsilon)
+        der_sigma[:, :, -1, ...] = (x[:, :, -1, ...] - x[:, :, -2, ...]) / (delta_sigma[:, :, -2, ...] + self.epsilon)
         
         return der_sigma.to(self.device)
 
@@ -203,7 +209,7 @@ class TemperaturePhysicallyInformedLoss(nn.Module):
 
         ps_expanded = msl.unsqueeze(2)
 
-        p = p_levels * ps_expanded / p_levels[:,:,-1:,:,:]
+        p = p_levels * ps_expanded / (p_levels[:,:,-1:,:,:] + self.epsilon)
 
         omega = sigma_dot * p
         
@@ -220,9 +226,9 @@ class TemperaturePhysicallyInformedLoss(nn.Module):
     
         ps_expanded = msl.unsqueeze(2)
 
-        p = p_levels * ps_expanded / p_levels[:,:,-1:,:,:]
+        p = p_levels * ps_expanded / (p_levels[:,:,-1:,:,:] + self.epsilon)
 
-        adiabatic = self.constants['kappa'] * T * omega / p
+        adiabatic = self.constants['kappa'] * T * omega / (p + self.epsilon)
         
         return adiabatic
     
@@ -274,8 +280,8 @@ class TemperaturePhysicallyInformedLoss(nn.Module):
     def calculate_residuals_from_tensor(self, data_tensor, dt=6, dx=0.25, dy=0.25):
         data_tensor.to(self.device)
 
-        lat = torch.linspace(90, -90, 721).to(self.device)
-        lon = torch.linspace(0, 360, 1440+1)[:-1].to(self.device)
+        lat = torch.linspace(90, -90, 32).to(self.device)
+        lon = torch.linspace(0, 360, 64+1)[:-1].to(self.device)
         atmos_levels = torch.tensor([50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000]).to(self.device)
 
         b, time_steps, _, h, w = data_tensor.shape
@@ -286,10 +292,10 @@ class TemperaturePhysicallyInformedLoss(nn.Module):
             atmos_levels=atmos_levels
         )
 
-        t = data_tensor[:, :, 13:26]
-        u = data_tensor[:, :, 26:39]
-        v = data_tensor[:, :, 39:52]
-        msl = data_tensor[:, :, 68:69]
+        t = data_tensor[:, :, 17:30]
+        u = data_tensor[:, :, 30:43]
+        v = data_tensor[:, :, 43:56]
+        msl = data_tensor[:, :, 3:4]
 
         original_mapping = self.variable_mapping.copy()
         

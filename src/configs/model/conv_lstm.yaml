@@ -1,0 +1,9 @@
+_target_: src.model.ConvLSTM_Model
+num_layers: 4
+num_hidden: "128,128,128,128"
+patch_size: 1
+filter_size: 5
+stride: 1
+layer_norm: 0
+pre_seq_length: 12
+after_seq_length: 12

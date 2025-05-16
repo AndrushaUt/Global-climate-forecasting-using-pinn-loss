@@ -47,77 +47,76 @@ class ConvLSTMCell(nn.Module):
 
 
 class ConvLSTM_Model(nn.Module):
-    def __init__(self, num_layers, num_hidden, patch_size, filter_size, stride, layer_norm):
+    r"""ConvLSTM Model
+
+    Implementation of `Convolutional LSTM Network: A Machine Learning Approach
+    for Precipitation Nowcasting <https://arxiv.org/abs/1506.04214>`.
+
+    """
+
+    def __init__(self, num_layers, num_hidden, patch_size, filter_size, stride, layer_norm, pre_seq_length, after_seq_length):
         super(ConvLSTM_Model, self).__init__()
-        _, C, H, W = 64, 32
+        T, C, H, W = 0, 69, 32, 64
+
+        self.pre_seq_length = pre_seq_length
+        self.after_seq_length = after_seq_length
 
         self.frame_channel = patch_size * patch_size * C
         self.num_layers = num_layers
-        self.num_hidden = num_hidden
-        
+        self.num_hidden = list(map(int, num_hidden.split(",")))
+        cell_list = []
+
         height = H // patch_size
         width = W // patch_size
         self.MSE_criterion = nn.MSELoss()
 
-        self.encoder_cells = nn.ModuleList()
         for i in range(num_layers):
-            in_channel = self.frame_channel if i == 0 else num_hidden[i - 1]
-            self.encoder_cells.append(
-                ConvLSTMCell(in_channel, num_hidden[i], height, width, 
-                           filter_size, stride, layer_norm)
+            in_channel = self.frame_channel if i == 0 else self.num_hidden[i - 1]
+            cell_list.append(
+                ConvLSTMCell(in_channel, self.num_hidden[i], height, width, filter_size,
+                                       stride, layer_norm)
             )
-
-        self.forecast_cells = nn.ModuleList()
-        for i in range(num_layers):
-            in_channel = self.frame_channel if i == 0 else num_hidden[i - 1]
-            self.forecast_cells.append(
-                ConvLSTMCell(in_channel, num_hidden[i], height, width, 
-                           filter_size, stride, layer_norm)
-            )
-
-        self.conv_last = nn.Conv2d(num_hidden[num_layers - 1], self.frame_channel,
+        self.cell_list = nn.ModuleList(cell_list)
+        self.conv_last = nn.Conv2d(self.num_hidden[num_layers - 1], self.frame_channel,
                                    kernel_size=1, stride=1, padding=0, bias=False)
 
     def forward(self, frames_tensor, **kwargs):
+        # [batch, length, height, width, channel] -> [batch, length, channel, height, width]
         device = frames_tensor.device
         frames = frames_tensor.permute(0, 1, 4, 2, 3).contiguous()
-        
         batch = frames.shape[0]
         height = frames.shape[3]
         width = frames.shape[4]
 
-        h_t_encoder = []
-        c_t_encoder = []
-        
+        next_frames = []
+        h_t = []
+        c_t = []
+
         for i in range(self.num_layers):
             zeros = torch.zeros([batch, self.num_hidden[i], height, width]).to(device)
-            h_t_encoder.append(zeros)
-            c_t_encoder.append(zeros)
+            h_t.append(zeros)
+            c_t.append(zeros)
 
-        for t in range(frames.shape[1]):
-            net = frames[:, t]
+        for t in range(self.pre_seq_length + self.after_seq_length - 1):
+            # Simplified input selection without scheduled sampling
+            if t < self.pre_seq_length:
+                # Используем только реальные входные данные для предварительных временных шагов
+                net = frames[:, t]
+            else:
+                # Используем только предсказания модели для будущих временных шагов
+               net = x_gen
 
-            for i in range(self.num_layers):
-                input_tensor = net if i == 0 else h_t_encoder[i-1]
-                h_t_encoder[i], c_t_encoder[i] = self.encoder_cells[i](
-                    input_tensor, h_t_encoder[i], c_t_encoder[i])
+            h_t[0], c_t[0] = self.cell_list[0](net, h_t[0], c_t[0])
 
-        h_t_forecast = h_t_encoder.copy()
-        c_t_forecast = c_t_encoder.copy()
+            for i in range(1, self.num_layers):
+                h_t[i], c_t[i] = self.cell_list[i](h_t[i - 1], h_t[i], c_t[i])
 
-        x_pred = self.conv_last(h_t_forecast[self.num_layers - 1])
+            x_gen = self.conv_last(h_t[self.num_layers - 1])
+            next_frames.append(x_gen)
 
-        for i in range(self.num_layers):
-            input_tensor = x_pred if i == 0 else h_t_forecast[i-1]
-            h_t_forecast[i], c_t_forecast[i] = self.forecast_cells[i](
-                input_tensor, h_t_forecast[i], c_t_forecast[i])
-
-        forecast_plus_6h = self.conv_last(h_t_forecast[self.num_layers - 1])
-
-        forecast_plus_6h = forecast_plus_6h.permute(0, 2, 3, 1).contiguous()
-        
-        
-        return forecast_plus_6h
+        # [length, batch, channel, height, width] -> [batch, length, height, width, channel]
+        next_frames = torch.stack(next_frames, dim=0).permute(1, 0, 3, 4, 2).contiguous()
+        return next_frames
 
 
     def __str__(self):

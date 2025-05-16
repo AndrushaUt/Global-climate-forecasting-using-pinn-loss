@@ -1,1 +1,5 @@
-from src.loss.ctc_loss import CTCLossWrapper
+from src.loss.humidity_pinn_loss import HumidityPhysicallyInformedLoss
+from src.loss.surface_pinn_loss import SurfacePressurePhysicallyInformedLoss
+from src.loss.temperature_pinn_loss import TemperaturePhysicallyInformedLoss
+from src.loss.vorticity_pinn_loss import PhysicallyInformedLoss
+from src.loss.combined_loss import CombinedLoss

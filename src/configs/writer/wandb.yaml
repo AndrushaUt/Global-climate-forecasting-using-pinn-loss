@@ -1,7 +1,7 @@
 _target_: src.logger.WandBWriter
-project_name: "pytorch_template_asr_example"
+project_name: "diplom"
 entity: null
-run_name: "testing"
+run_name: "one_day_conv_lstm_mse_first_exp_66_hours_humid"
 mode: "online"
 loss_names: ["loss"] # which losses to log (useful for multi-loss tasks, s.a. GANs)
 log_checkpoints: False # set to True if you want to log save_dir with checkpoints to W&B

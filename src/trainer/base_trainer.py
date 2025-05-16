@@ -22,7 +22,6 @@ class BaseTrainer:
         metrics,
         optimizer,
         lr_scheduler,
-        text_encoder,
         config,
         device,
         dataloaders,
@@ -30,7 +29,6 @@ class BaseTrainer:
         writer,
         epoch_len=None,
         skip_oom=True,
-        batch_transforms=None,
     ):
         """
         Args:
@@ -209,6 +207,7 @@ class BaseTrainer:
             try:
                 batch = self.process_batch(
                     batch,
+                    epoch,
                     metrics=self.train_metrics,
                 )
             except torch.cuda.OutOfMemoryError as e:
@@ -233,7 +232,7 @@ class BaseTrainer:
                     "learning rate", self.lr_scheduler.get_last_lr()[0]
                 )
                 self._log_scalars(self.train_metrics)
-                self._log_batch(batch_idx, batch)
+                self._log_batch(batch_idx, batch, epoch)
                 # we don't want to reset train metrics at the start of every epoch
                 # because we are interested in recent train metrics
                 last_train_metrics = self.train_metrics.result()
@@ -272,12 +271,13 @@ class BaseTrainer:
             ):
                 batch = self.process_batch(
                     batch,
+                    epoch,
                     metrics=self.evaluation_metrics,
                 )
             self.writer.set_step(epoch * self.epoch_len, part)
             self._log_scalars(self.evaluation_metrics)
             self._log_batch(
-                batch_idx, batch, part
+                batch_idx, batch, epoch, part
             )  # log only the last batch during inference
 
         return self.evaluation_metrics.result()
@@ -366,7 +366,7 @@ class BaseTrainer:
         """
         # do batch transforms on device
         transform_type = "train" if self.is_train else "inference"
-        transforms = self.batch_transforms.get(transform_type)
+        transforms = None
         if transforms is not None:
             for transform_name in transforms.keys():
                 batch[transform_name] = transforms[transform_name](
